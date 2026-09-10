@@ -6,13 +6,18 @@ type HabitRow = {
   name: string;
   icon: string;
   color: string;
+  description: string | null;
+  habit_type: Habit["type"];
+  target_value: number;
+  unit: string | null;
+  goal_period: Habit["goalPeriod"];
   frequency_type: Habit["frequencyType"];
   reminder_enabled: number;
   reminder_time: string | null;
   created_at: string;
   archived_at: string | null;
 };
-type TodayHabitRow = HabitRow & { completed_today: number };
+type TodayHabitRow = HabitRow & { completed_today: number; progress_value: number; progress_state: TodayHabit["progressState"] };
 async function hydrate(db: Connection, row: HabitRow): Promise<Habit> {
   const days = await db.getAllAsync<{ weekday: number }>(
     "SELECT weekday FROM habit_schedule_days WHERE habit_id = ? ORDER BY weekday",
@@ -23,6 +28,11 @@ async function hydrate(db: Connection, row: HabitRow): Promise<Habit> {
     name: row.name,
     icon: row.icon,
     color: row.color,
+    description: row.description,
+    type: row.habit_type,
+    targetValue: row.target_value,
+    unit: row.unit,
+    goalPeriod: row.goal_period,
     frequencyType: row.frequency_type,
     scheduledDays: days.map((day) => day.weekday),
     reminderEnabled: row.reminder_enabled === 1,
@@ -56,9 +66,11 @@ export function habitRepository(db: Database) {
       const rows = await db.getAllAsync<TodayHabitRow>(
         `SELECT h.*,
           EXISTS (
-            SELECT 1 FROM habit_completions c
-            WHERE c.habit_id = h.id AND c.completion_date = ?
+            SELECT 1 FROM progress_entries p
+            WHERE p.habit_id = h.id AND p.local_date = ? AND p.state = 'completed'
           ) AS completed_today
+          ,COALESCE((SELECT value FROM progress_entries p WHERE p.habit_id = h.id AND p.local_date = ?), 0) AS progress_value
+          ,(SELECT state FROM progress_entries p WHERE p.habit_id = h.id AND p.local_date = ?) AS progress_state
         FROM habits h
         WHERE h.archived_at IS NULL
           AND (
@@ -69,18 +81,24 @@ export function habitRepository(db: Database) {
             )
           )
         ORDER BY h.created_at, h.id`,
-        date,
+        date, date, date,
         weekday,
       );
       return Promise.all(
         rows.map(async (row) => ({
           ...(await hydrate(db, row)),
           completedToday: row.completed_today === 1,
+          progressValue: row.progress_value,
+          progressState: row.progress_state,
         })),
       );
     },
     async save(habit: Habit): Promise<void> {
       if (!habit.name.trim()) throw new Error("Habit name is required.");
+      if (!["check", "count", "quantity", "duration"].includes(habit.type)) throw new Error("Invalid habit type.");
+      if (!["daily", "weekly", "monthly"].includes(habit.goalPeriod)) throw new Error("Invalid goal period.");
+      if (!Number.isFinite(habit.targetValue) || habit.targetValue <= 0) throw new Error("Target value must be positive.");
+      if (habit.type === "check" && (habit.targetValue !== 1 || habit.unit !== null)) throw new Error("Check habits have a target of one and no unit.");
       if (
         habit.frequencyType !== "daily" &&
         habit.frequencyType !== "specific_days"
@@ -95,13 +113,18 @@ export function habitRepository(db: Database) {
         throw new Error("Invalid schedule.");
       await db.withExclusiveTransactionAsync(async (tx) => {
         await tx.runAsync(
-          `INSERT INTO habits (id, name, icon, color, frequency_type, reminder_enabled, reminder_time, created_at, archived_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET name=excluded.name, icon=excluded.icon, color=excluded.color, frequency_type=excluded.frequency_type, reminder_enabled=excluded.reminder_enabled, reminder_time=excluded.reminder_time, archived_at=excluded.archived_at`,
+          `INSERT INTO habits (id, name, icon, color, description, habit_type, target_value, unit, goal_period, frequency_type, reminder_enabled, reminder_time, created_at, archived_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET name=excluded.name, icon=excluded.icon, color=excluded.color, description=excluded.description, habit_type=excluded.habit_type, target_value=excluded.target_value, unit=excluded.unit, goal_period=excluded.goal_period, frequency_type=excluded.frequency_type, reminder_enabled=excluded.reminder_enabled, reminder_time=excluded.reminder_time, archived_at=excluded.archived_at`,
           habit.id,
           habit.name.trim(),
           habit.icon,
           habit.color,
+          habit.description,
+          habit.type,
+          habit.targetValue,
+          habit.unit,
+          habit.goalPeriod,
           habit.frequencyType,
           Number(habit.reminderEnabled),
           habit.reminderTime,

@@ -183,9 +183,15 @@ function SavedToday({ now }: { now: Date }) {
             {habits.map((habit) => (
               <HabitRow
                 key={habit.id}
-                habit={habit}
+                habit={{
+                  ...habit,
+                  subtitle:
+                    habit.type === "check"
+                      ? undefined
+                      : `${habit.progressValue} / ${habit.targetValue}${habit.unit ? ` ${habit.unit}` : ""}`,
+                }}
                 completed={habit.completedToday}
-                onToggle={() => void toggle(habit)}
+                onToggle={habit.type === "check" ? () => void toggle(habit) : undefined}
               />
             ))}
           </View>

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import type { Database, SqlValue } from "../db/connection.ts";
 import { migrateDatabase, migrations } from "../db/migrations.ts";
 import { habitRepository } from "../features/habits/habit.repository.ts";
-import { completionRepository } from "../features/completions/completion.repository.ts";
+import { completionRepository, progressRepository } from "../features/completions/completion.repository.ts";
 import type { Habit } from "../features/habits/habit.types.ts";
 import { assertLocalDateKey } from "../lib/dates.ts";
 function connect(path: string) {
@@ -43,6 +43,11 @@ const habit: Habit = {
   name: "Read 'a book'",
   icon: "book-outline",
   color: "#123456",
+  description: null,
+  type: "check",
+  targetValue: 1,
+  unit: null,
+  goalPeriod: "daily",
   frequencyType: "specific_days",
   scheduledDays: [7, 1, 3],
   reminderEnabled: false,
@@ -123,7 +128,7 @@ test("failed migration rolls back schema and version; newer databases are refuse
   try {
     await migrateDatabase(connection.db);
     migrations.push({
-      version: 2,
+      version: 3,
       sql: "CREATE TABLE partial (id TEXT); INVALID SQL;",
     });
     try {
@@ -137,7 +142,7 @@ test("failed migration rolls back schema and version; newer databases are refuse
           "PRAGMA user_version",
         )
       )?.user_version,
-      1,
+      2,
     );
     assert.equal(
       await connection.db.getFirstAsync(
@@ -150,6 +155,19 @@ test("failed migration rolls back schema and version; newer databases are refuse
   } finally {
     connection.close();
   }
+});
+test("V1 data migrates to rich check habits and preserves representative history", async () => {
+  const connection = connect(":memory:");
+  try {
+    await connection.db.execAsync(migrations[0].sql);
+    await connection.db.execAsync("PRAGMA user_version = 1");
+    await connection.db.runAsync("INSERT INTO habits (id, name, icon, color, frequency_type, reminder_enabled, reminder_time, created_at, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", "legacy", "Vitamins", "medical-outline", "#345678", "daily", 1, "09:00", "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z");
+    await connection.db.runAsync("INSERT INTO habit_completions (id, habit_id, completion_date, completed_at) VALUES (?, ?, ?, ?)", "legacy-entry", "legacy", "2026-01-02", "2026-01-02T08:00:00Z");
+    await migrateDatabase(connection.db);
+    const migrated = await habitRepository(connection.db).get("legacy");
+    assert.deepEqual(migrated && { type: migrated.type, targetValue: migrated.targetValue, unit: migrated.unit, goalPeriod: migrated.goalPeriod, reminderTime: migrated.reminderTime, archivedAt: migrated.archivedAt }, { type: "check", targetValue: 1, unit: null, goalPeriod: "daily", reminderTime: "09:00", archivedAt: "2026-02-01T00:00:00Z" });
+    assert.deepEqual((await progressRepository(connection.db).list("legacy")).map((entry) => ({ ...entry })), [{ id: "legacy-entry", habitId: "legacy", localDate: "2026-01-02", value: 1, state: "completed", recordedAt: "2026-01-02T08:00:00Z", note: null }]);
+  } finally { connection.close(); }
 });
 test("invalid schedules are rejected without changing the stored habit", async () => {
   const connection = connect(":memory:");

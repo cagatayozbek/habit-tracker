@@ -4,6 +4,7 @@ import { localDateKey, localWeekday, greeting } from "../lib/dates.ts";
 import { calculateProgress, completionPercentage } from "../lib/progress.ts";
 import type { Habit } from "../features/habits/habit.types.ts";
 import { calculateStreaks } from "../features/completions/streak.ts";
+import { evaluateGoal, goalPeriodBounds, progressStateForValue, targetCompletionPercentage } from "../lib/goals.ts";
 test("completion percentage handles empty, partial, complete and bounded counts", () => {
   assert.equal(completionPercentage(0, 0), 0);
   assert.equal(completionPercentage(1, 4), 25);
@@ -73,6 +74,7 @@ test("streaks ignore future and unscheduled completions", () => {
 test("progress derives expected occurrences, percentages, and heatmap levels from schedules", () => {
   const daily: Habit = {
     id: "daily", name: "Read", icon: "book-outline", color: "#123456",
+    description: null, type: "check", targetValue: 1, unit: null, goalPeriod: "daily",
     frequencyType: "daily", scheduledDays: [], reminderEnabled: false,
     reminderTime: null, createdAt: "2026-09-01T12:00:00Z", archivedAt: null,
   };
@@ -87,4 +89,18 @@ test("progress derives expected occurrences, percentages, and heatmap levels fro
   assert.equal(summary.currentStreak, 3);
   assert.equal(summary.heatmap.find((day) => day.date === "2026-09-10")?.level, 1);
   assert.equal(summary.heatmap.find((day) => day.date === "2026-09-07")?.level, 4);
+});
+
+test("shared goal engine handles targets, decimals, terminal states and local period boundaries", () => {
+  assert.equal(targetCompletionPercentage(2.5, 5), 50);
+  assert.equal(progressStateForValue(5, 5), "completed");
+  assert.equal(progressStateForValue(1, 5, "skipped"), "skipped");
+  assert.deepEqual(goalPeriodBounds("2026-01-01", "weekly"), { start: "2025-12-29", end: "2026-01-04" });
+  assert.deepEqual(goalPeriodBounds("2028-02-29", "monthly"), { start: "2028-02-01", end: "2028-02-29" });
+  const goal = { targetValue: 3, goalPeriod: "weekly" as const };
+  const entries = [
+    { id: "one", habitId: "h", localDate: "2026-01-01", value: 1.5, state: "active" as const, recordedAt: "x", note: null },
+    { id: "two", habitId: "h", localDate: "2026-01-02", value: 1.5, state: "completed" as const, recordedAt: "x", note: null },
+  ];
+  assert.deepEqual(evaluateGoal(goal, entries, "2026-01-03"), { start: "2025-12-29", end: "2026-01-04", value: 3, state: "completed", percentage: 100 });
 });

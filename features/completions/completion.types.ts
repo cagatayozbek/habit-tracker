@@ -5,3 +5,16 @@ export interface HabitCompletion {
   completionDate: string;
   completedAt: string;
 }
+
+export type ProgressState = "active" | "completed" | "failed" | "skipped";
+
+/** A stored fact for one local calendar day. Duration values are seconds. */
+export interface ProgressEntry {
+  id: string;
+  habitId: string;
+  localDate: string;
+  value: number;
+  state: ProgressState;
+  recordedAt: string;
+  note: string | null;
+}

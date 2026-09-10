@@ -39,6 +39,11 @@ export function HabitEditor({ habit }: { habit?: Habit }) {
   const [name, setName] = useState(habit?.name ?? "");
   const [icon, setIcon] = useState(habit?.icon ?? icons[0]);
   const [color, setColor] = useState(habit?.color ?? colorOptions[0].value);
+  const [description, setDescription] = useState(habit?.description ?? "");
+  const [type, setType] = useState<Habit["type"]>(habit?.type ?? "check");
+  const [targetValue, setTargetValue] = useState(String(habit?.targetValue ?? 1));
+  const [unit, setUnit] = useState(habit?.unit ?? "");
+  const [goalPeriod, setGoalPeriod] = useState<Habit["goalPeriod"]>(habit?.goalPeriod ?? "daily");
   const [frequency, setFrequency] = useState<Habit["frequencyType"]>(
     habit?.frequencyType ?? "daily",
   );
@@ -79,6 +84,11 @@ export function HabitEditor({ habit }: { habit?: Habit }) {
       setError(t("dayRequired"));
       return;
     }
+    const parsedTarget = Number(targetValue.replace(",", "."));
+    if (!Number.isFinite(parsedTarget) || parsedTarget <= 0 || (type === "count" && !Number.isInteger(parsedTarget))) {
+      setError("Enter a valid target.");
+      return;
+    }
     void run(async () => {
       const now = currentTimestamp();
       const savedHabit: Habit = {
@@ -89,6 +99,11 @@ export function HabitEditor({ habit }: { habit?: Habit }) {
         name: name.trim(),
         icon,
         color,
+        description: description.trim() || null,
+        type,
+        targetValue: type === "check" ? 1 : parsedTarget,
+        unit: type === "check" ? null : unit.trim() || null,
+        goalPeriod,
         frequencyType: frequency,
         scheduledDays: frequency === "daily" ? [] : [...days].sort(),
         reminderEnabled,
@@ -142,6 +157,33 @@ export function HabitEditor({ habit }: { habit?: Habit }) {
               minHeight: 54,
             }}
           />
+        </View>
+        <View style={{ gap: 12 }}>
+          <Label style={styles.heading}>Details</Label>
+          <TextInput
+            accessibilityLabel="Habit description"
+            placeholder="Optional note"
+            placeholderTextColor={colors.textSecondary}
+            value={description}
+            onChangeText={setDescription}
+            editable={!busy}
+            maxLength={300}
+            style={{ color: colors.textPrimary, backgroundColor: colors.surface, padding: 16, borderRadius: 16, fontSize: 17, minHeight: 54 }}
+          />
+          <View style={[styles.row, { flexWrap: "wrap", gap: 8 }]}>
+            {(["check", "count", "quantity", "duration"] as const).map((option) => (
+              <Pressable key={option} disabled={busy} accessibilityRole="radio" accessibilityState={{ checked: type === option }} onPress={() => setType(option)} style={{ padding: 12, borderRadius: 12, backgroundColor: type === option ? colors.successSoft : colors.surface }}><Label>{option[0].toUpperCase() + option.slice(1)}</Label></Pressable>
+            ))}
+          </View>
+          {type !== "check" ? <View style={[styles.row, { gap: 8 }]}>
+            <TextInput accessibilityLabel="Target value" keyboardType="decimal-pad" value={targetValue} onChangeText={setTargetValue} editable={!busy} style={{ flex: 1, color: colors.textPrimary, backgroundColor: colors.surface, padding: 16, borderRadius: 16, fontSize: 17, minHeight: 54 }} />
+            <TextInput accessibilityLabel="Unit" placeholder={type === "duration" ? "seconds" : "Unit"} placeholderTextColor={colors.textSecondary} value={unit} onChangeText={setUnit} editable={!busy} maxLength={24} style={{ flex: 1, color: colors.textPrimary, backgroundColor: colors.surface, padding: 16, borderRadius: 16, fontSize: 17, minHeight: 54 }} />
+          </View> : null}
+          <View style={[styles.row, { flexWrap: "wrap", gap: 8 }]}>
+            {(["daily", "weekly", "monthly"] as const).map((option) => (
+              <Pressable key={option} disabled={busy} accessibilityRole="radio" accessibilityState={{ checked: goalPeriod === option }} onPress={() => setGoalPeriod(option)} style={{ padding: 12, borderRadius: 12, backgroundColor: goalPeriod === option ? colors.successSoft : colors.surface }}><Label>{option[0].toUpperCase() + option.slice(1)}</Label></Pressable>
+            ))}
+          </View>
         </View>
         <View style={{ gap: 16 }}>
           <Label style={styles.heading}>{t("icon")}</Label>
