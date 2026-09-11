@@ -48,6 +48,8 @@ const habit: Habit = {
   targetValue: 1,
   unit: null,
   goalPeriod: "daily",
+  groupId: null,
+  sortOrder: 1,
   frequencyType: "specific_days",
   scheduledDays: [7, 1, 3],
   reminderEnabled: false,
@@ -80,7 +82,9 @@ test("repository data survives reopen; migrations preserve history; archive and 
     await migrateDatabase(connection.db);
     const reopened = habitRepository(connection.db);
     const history = completionRepository(connection.db);
-    assert.deepEqual(await reopened.get(habit.id), {
+    const reloaded = await reopened.get(habit.id);
+    const { schedule: _schedule, groupName: _groupName, ...reloadedLegacy } = reloaded!;
+    assert.deepEqual(reloadedLegacy, {
       ...habit,
       scheduledDays: [1, 3, 7],
     });
@@ -93,6 +97,7 @@ test("repository data survives reopen; migrations preserve history; archive and 
       ...habit,
       frequencyType: "daily",
       scheduledDays: [],
+      schedule: { type: "daily", weekdays: [], daysOfMonth: [], intervalDays: null, occurrences: null, startDate: "2026-09-11", endDate: null },
     });
     assert.deepEqual((await reopened.get(habit.id))?.scheduledDays, []);
     assert.equal((await history.list(habit.id)).length, 1);
@@ -128,7 +133,7 @@ test("failed migration rolls back schema and version; newer databases are refuse
   try {
     await migrateDatabase(connection.db);
     migrations.push({
-      version: 3,
+      version: 5,
       sql: "CREATE TABLE partial (id TEXT); INVALID SQL;",
     });
     try {
@@ -142,7 +147,7 @@ test("failed migration rolls back schema and version; newer databases are refuse
           "PRAGMA user_version",
         )
       )?.user_version,
-      2,
+      4,
     );
     assert.equal(
       await connection.db.getFirstAsync(
@@ -182,6 +187,36 @@ test("invalid schedules are rejected without changing the stored habit", async (
     connection.close();
   }
 });
+test("optional groups persist without affecting ungrouped habits", async () => {
+  const connection = connect(":memory:");
+  try {
+    await migrateDatabase(connection.db);
+    const repo = habitRepository(connection.db);
+    await repo.save(habit, "Health");
+    await repo.save({ ...habit, id: "plain", sortOrder: 2 });
+    const saved = await repo.get(habit.id);
+    assert.equal(saved?.groupName, "Health");
+    assert.ok(saved?.groupId);
+    assert.equal((await repo.get("plain"))?.groupId, null);
+  } finally { connection.close(); }
+});
+test("schedule edits close the old version instead of rewriting historical dates", async () => {
+  const connection = connect(":memory:");
+  try {
+    await migrateDatabase(connection.db);
+    const repo = habitRepository(connection.db);
+    const original = { ...habit, schedule: { type: "weekdays" as const, weekdays: [1], daysOfMonth: [], intervalDays: null, occurrences: null, startDate: "2026-09-01", endDate: null } };
+    await repo.save(original);
+    await repo.save({ ...original, schedule: { type: "days_of_month" as const, weekdays: [], daysOfMonth: [11], intervalDays: null, occurrences: null, startDate: "2026-09-11", endDate: null } });
+    const versions = (await connection.db.getAllAsync<{ schedule_type: string; effective_from: string; effective_until: string | null }>("SELECT schedule_type, effective_from, effective_until FROM habit_schedule_versions WHERE habit_id = ? ORDER BY effective_from", original.id)).map(({ schedule_type, effective_from, effective_until }) => ({ schedule_type, effective_from, effective_until }));
+    assert.deepEqual(versions, [
+      { schedule_type: "weekdays", effective_from: "2026-09-01", effective_until: "2026-09-10" },
+      { schedule_type: "days_of_month", effective_from: "2026-09-11", effective_until: null },
+    ]);
+    assert.deepEqual((await repo.listScheduledForDate("2026-09-07", 1)).map((item) => item.id), [original.id]);
+    assert.deepEqual((await repo.listScheduledForDate("2026-09-11", 5)).map((item) => item.id), [original.id]);
+  } finally { connection.close(); }
+});
 test("stored completion dates validate calendar dates without timezone conversion", () => {
   for (const valid of ["2028-02-29", "2026-12-31"])
     assert.doesNotThrow(() => assertLocalDateKey(valid));
@@ -202,13 +237,15 @@ test("today query returns only active scheduled habits with date-specific comple
     await migrateDatabase(connection.db);
     const habits = habitRepository(connection.db);
     const completions = completionRepository(connection.db);
-    const mondayHabit = { ...habit, id: "monday", scheduledDays: [1] };
-    const tuesdayHabit = { ...habit, id: "tuesday", scheduledDays: [2] };
+    const scheduleStart = "2026-09-01";
+    const mondayHabit = { ...habit, id: "monday", scheduledDays: [1], schedule: { type: "weekdays" as const, weekdays: [1], daysOfMonth: [], intervalDays: null, occurrences: null, startDate: scheduleStart, endDate: null } };
+    const tuesdayHabit = { ...habit, id: "tuesday", scheduledDays: [2], schedule: { type: "weekdays" as const, weekdays: [2], daysOfMonth: [], intervalDays: null, occurrences: null, startDate: scheduleStart, endDate: null } };
     const dailyHabit = {
       ...habit,
       id: "daily",
       frequencyType: "daily" as const,
       scheduledDays: [],
+      schedule: { type: "daily" as const, weekdays: [], daysOfMonth: [], intervalDays: null, occurrences: null, startDate: scheduleStart, endDate: null },
     };
     await habits.save(mondayHabit);
     await habits.save(tuesdayHabit);

@@ -4,7 +4,8 @@ import { localDateKey, localWeekday, greeting } from "../lib/dates.ts";
 import { calculateProgress, completionPercentage } from "../lib/progress.ts";
 import type { Habit } from "../features/habits/habit.types.ts";
 import { calculateStreaks } from "../features/completions/streak.ts";
-import { evaluateGoal, goalPeriodBounds, progressStateForValue, targetCompletionPercentage } from "../lib/goals.ts";
+import { calculateGoalStreaks, evaluateGoal, evaluateScheduledGoal, goalPeriodBounds, progressStateForValue, targetCompletionPercentage } from "../lib/goals.ts";
+import { expectedOccurrences, scheduleMatchesDate, scheduleMatchesVersionedDate } from "../lib/schedules.ts";
 test("completion percentage handles empty, partial, complete and bounded counts", () => {
   assert.equal(completionPercentage(0, 0), 0);
   assert.equal(completionPercentage(1, 4), 25);
@@ -75,6 +76,7 @@ test("progress derives expected occurrences, percentages, and heatmap levels fro
   const daily: Habit = {
     id: "daily", name: "Read", icon: "book-outline", color: "#123456",
     description: null, type: "check", targetValue: 1, unit: null, goalPeriod: "daily",
+    groupId: null, sortOrder: 1,
     frequencyType: "daily", scheduledDays: [], reminderEnabled: false,
     reminderTime: null, createdAt: "2026-09-01T12:00:00Z", archivedAt: null,
   };
@@ -103,4 +105,32 @@ test("shared goal engine handles targets, decimals, terminal states and local pe
     { id: "two", habitId: "h", localDate: "2026-01-02", value: 1.5, state: "completed" as const, recordedAt: "x", note: null },
   ];
   assert.deepEqual(evaluateGoal(goal, entries, "2026-01-03"), { start: "2025-12-29", end: "2026-01-04", value: 3, state: "completed", percentage: 100 });
+});
+
+test("all flexible schedule rules resolve with local month lengths and inclusive boundaries", () => {
+  const base = { weekdays: [], daysOfMonth: [], intervalDays: null, occurrences: null, startDate: "2028-02-01", endDate: "2028-02-29" };
+  assert.equal(scheduleMatchesDate({ ...base, type: "daily" }, "2028-02-29"), true);
+  assert.equal(scheduleMatchesDate({ ...base, type: "weekdays", weekdays: [4] }, "2028-02-03"), true);
+  assert.equal(scheduleMatchesDate({ ...base, type: "days_of_month", daysOfMonth: [29, 31] }, "2028-02-29"), true);
+  assert.equal(expectedOccurrences({ ...base, type: "days_of_month", daysOfMonth: [29, 31] }, "2028-02-01", "2028-02-29"), 1);
+  assert.equal(scheduleMatchesDate({ ...base, type: "interval", intervalDays: 3 }, "2028-02-28"), true);
+  assert.equal(expectedOccurrences({ ...base, type: "times_per_week", occurrences: 2 }, "2028-02-01", "2028-02-29"), 10);
+  assert.equal(expectedOccurrences({ ...base, type: "times_per_month", occurrences: 4 }, "2028-02-01", "2028-02-29"), 4);
+});
+
+test("schedule versions preserve historical expectations and goal-period streaks ignore unfinished periods", () => {
+  const versions = [
+    { id: "one", habitId: "h", type: "weekdays" as const, weekdays: [1], daysOfMonth: [], intervalDays: null, occurrences: null, startDate: "2026-01-01", endDate: null, effectiveFrom: "2026-01-01", effectiveUntil: "2026-01-31" },
+    { id: "two", habitId: "h", type: "days_of_month" as const, weekdays: [], daysOfMonth: [1], intervalDays: null, occurrences: null, startDate: "2026-02-01", endDate: null, effectiveFrom: "2026-02-01", effectiveUntil: null },
+  ];
+  assert.equal(scheduleMatchesVersionedDate(versions, "2026-01-05"), true);
+  assert.equal(scheduleMatchesVersionedDate(versions, "2026-01-06"), false);
+  assert.equal(scheduleMatchesVersionedDate(versions, "2026-02-01"), true);
+  const entries = [
+    { id: "jan", habitId: "h", localDate: "2026-01-05", value: 1, state: "completed" as const, recordedAt: "x", note: null },
+    { id: "feb", habitId: "h", localDate: "2026-02-01", value: 1, state: "completed" as const, recordedAt: "x", note: null },
+  ];
+  const habitGoal = { targetValue: 1, goalPeriod: "monthly" as const };
+  assert.deepEqual(evaluateScheduledGoal(habitGoal, versions, entries, "2026-01-20"), { start: "2026-01-01", end: "2026-01-31", value: 1, state: "completed", percentage: 100, expectedOccurrences: 4 });
+  assert.deepEqual(calculateGoalStreaks(habitGoal, versions, entries, "2026-03-01"), { current: 2, longest: 2 });
 });

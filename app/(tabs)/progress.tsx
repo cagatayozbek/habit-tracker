@@ -33,7 +33,8 @@ function SavedProgress() {
     try {
       const habits = await habitsRepo.list();
       const entries = await Promise.all(habits.map(async (habit) => [habit.id, (await completionsRepo.list(habit.id)).map((item) => item.completionDate)] as const));
-      setSummary(calculateProgress(habits, new Map(entries), date));
+      const versions = await Promise.all(habits.map(async (habit) => [habit.id, await habitsRepo.scheduleVersions(habit.id)] as const));
+      setSummary(calculateProgress(habits, new Map(entries), date, new Map(versions)));
       setError("");
     } catch { setError(t("loadProgressError")); }
   }, [completionsRepo, date, habitsRepo, t]);

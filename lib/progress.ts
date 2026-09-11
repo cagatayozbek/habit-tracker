@@ -1,5 +1,7 @@
 import type { Habit } from "../features/habits/habit.types.ts";
+import type { ScheduleVersion } from "../features/habits/habit.types.ts";
 import { assertLocalDateKey, localDateKey, localWeekday } from "./dates.ts";
+import { scheduleMatchesVersionedDate } from "./schedules.ts";
 
 export function completionPercentage(completed: number, total: number): number {
   if (total <= 0) return 0;
@@ -34,7 +36,8 @@ function shift(key: string, amount: number): string {
   return localDateKey(date);
 }
 
-function scheduled(habit: Habit, date: string): boolean {
+function scheduled(habit: Habit, date: string, versions?: readonly ScheduleVersion[]): boolean {
+  if (versions?.length) return scheduleMatchesVersionedDate(versions, date);
   return habit.frequencyType === "daily" || habit.scheduledDays.includes(localWeekday(fromKey(date)));
 }
 
@@ -50,6 +53,7 @@ export function calculateProgress(
   habits: readonly Habit[],
   completionDatesByHabit: ReadonlyMap<string, readonly string[]>,
   referenceDate: string,
+  scheduleVersionsByHabit?: ReadonlyMap<string, readonly ScheduleVersion[]>,
 ): ProgressSummary {
   assertLocalDateKey(referenceDate);
   const active = habits.filter((habit) => habit.archivedAt === null);
@@ -71,7 +75,7 @@ export function calculateProgress(
 
   for (let date = start; date <= end; date = shift(date, 1)) {
     const pastOrToday = date <= referenceDate;
-    const expectedHabits = pastOrToday ? active.filter((habit) => scheduled(habit, date)) : [];
+    const expectedHabits = pastOrToday ? active.filter((habit) => scheduled(habit, date, scheduleVersionsByHabit?.get(habit.id))) : [];
     const completed = expectedHabits.filter((habit) => completions.get(habit.id)?.has(date)).length;
     if (date >= weekStart && pastOrToday) {
       week.expected += expectedHabits.length;
@@ -88,7 +92,7 @@ export function calculateProgress(
     }
   }
   for (let date = shift(referenceDate, -1); date >= start; date = shift(date, -1)) {
-    const expected = active.filter((habit) => scheduled(habit, date));
+    const expected = active.filter((habit) => scheduled(habit, date, scheduleVersionsByHabit?.get(habit.id)));
     if (expected.length === 0) continue;
     if (!expected.every((habit) => completions.get(habit.id)?.has(date))) break;
     currentStreak += 1;
@@ -105,7 +109,7 @@ export function calculateProgress(
       let completed = 0;
       let expected = 0;
       for (let date = monthStart; date <= referenceDate; date = shift(date, 1)) {
-        if (!scheduled(habit, date)) continue;
+        if (!scheduled(habit, date, scheduleVersionsByHabit?.get(habit.id))) continue;
         expected += 1;
         if (completions.get(habit.id)?.has(date)) completed += 1;
       }

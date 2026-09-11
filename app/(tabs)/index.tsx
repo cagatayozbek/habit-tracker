@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { Platform, View } from "react-native";
+import { Platform, Pressable, TextInput, View } from "react-native";
 import { useFocusEffect } from "expo-router";
 import { Screen, Label, styles } from "../../components/ui";
 import { ScreenHeader } from "../../components/ScreenHeader";
@@ -8,6 +8,7 @@ import { ProgressBar } from "../../components/ProgressBar";
 import { ActionButton } from "../../components/ActionButton";
 import type { TodayHabit } from "../../features/habits/habit.types";
 import { useCompletionRepository } from "../../hooks/useCompletionRepository";
+import { useProgressRepository } from "../../hooks/useProgressRepository";
 import { useHabitRepository } from "../../hooks/useHabitRepository";
 import { useLocalToday } from "../../hooks/useLocalToday";
 import {
@@ -22,6 +23,9 @@ import { localIdentifier } from "../../lib/ids";
 import { useTheme } from "../../theme/ThemeProvider";
 import { syncHabitReminders } from "../../features/notifications/notification.service";
 import { useTranslation } from "../../lib/i18n";
+import { selectionHaptic } from "../../lib/haptics";
+import { progressStateForValue } from "../../lib/goals";
+import type { ProgressState } from "../../features/completions/completion.types";
 
 export default function Today() {
   const now = useLocalToday();
@@ -40,6 +44,7 @@ export default function Today() {
 function SavedToday({ now }: { now: Date }) {
   const habitsRepo = useHabitRepository();
   const completionsRepo = useCompletionRepository();
+  const progressRepo = useProgressRepository();
   const { colors } = useTheme();
   const { t, language } = useTranslation();
   const date = localDateKey(now);
@@ -74,6 +79,14 @@ function SavedToday({ now }: { now: Date }) {
     [habits],
   );
   const percentage = completionPercentage(completedCount, habits.length);
+  const habitGroups = useMemo(() => {
+    const groups = new Map<string, TodayHabit[]>();
+    for (const habit of habits) {
+      const key = habit.groupName ?? "";
+      groups.set(key, [...(groups.get(key) ?? []), habit]);
+    }
+    return [...groups];
+  }, [habits]);
 
   const toggle = async (habit: TodayHabit) => {
     if (pending.current.has(habit.id)) return;
@@ -111,6 +124,44 @@ function SavedToday({ now }: { now: Date }) {
     } finally {
       pending.current.delete(habit.id);
     }
+  };
+
+  const saveRichProgress = async (habit: TodayHabit, value: number, explicit: ProgressState = "active") => {
+    if (pending.current.has(habit.id) || !Number.isFinite(value) || value < 0) return;
+    pending.current.add(habit.id);
+    const state = progressStateForValue(value, habit.targetValue, explicit);
+    setHabits((current) => current.map((item) => item.id === habit.id ? {
+      ...item, progressValue: value, progressState: state, completedToday: state === "completed",
+    } : item));
+    try {
+      await progressRepo.save({ id: localIdentifier(), habitId: habit.id, localDate: date, value, state, recordedAt: currentTimestamp(), note: null }, habit.targetValue);
+      selectionHaptic();
+      setError("");
+    } catch {
+      await load();
+      setError(t("saveCheckinError"));
+    } finally { pending.current.delete(habit.id); }
+  };
+
+  const setRichState = async (habit: TodayHabit, state: Extract<ProgressState, "failed" | "skipped">) => {
+    if (pending.current.has(habit.id)) return;
+    pending.current.add(habit.id);
+    setHabits((current) => current.map((item) => item.id === habit.id ? { ...item, progressState: state, completedToday: false } : item));
+    try {
+      await progressRepo.setState(habit.id, date, state, localIdentifier(), currentTimestamp());
+      selectionHaptic();
+      setError("");
+    } catch { await load(); setError(t("saveCheckinError")); }
+    finally { pending.current.delete(habit.id); }
+  };
+
+  const undoRichProgress = async (habit: TodayHabit) => {
+    if (pending.current.has(habit.id)) return;
+    pending.current.add(habit.id);
+    setHabits((current) => current.map((item) => item.id === habit.id ? { ...item, progressValue: 0, progressState: null, completedToday: false } : item));
+    try { await progressRepo.remove(habit.id, date); selectionHaptic(); setError(""); }
+    catch { await load(); setError(t("saveCheckinError")); }
+    finally { pending.current.delete(habit.id); }
   };
 
   return (
@@ -180,20 +231,14 @@ function SavedToday({ now }: { now: Date }) {
           {error ? <Label accessibilityRole="alert">{error}</Label> : null}
           <View>
             <Label style={styles.heading}>{t("dailyRhythm")}</Label>
-            {habits.map((habit) => (
-              <HabitRow
-                key={habit.id}
-                habit={{
-                  ...habit,
-                  subtitle:
-                    habit.type === "check"
-                      ? undefined
-                      : `${habit.progressValue} / ${habit.targetValue}${habit.unit ? ` ${habit.unit}` : ""}`,
-                }}
-                completed={habit.completedToday}
-                onToggle={habit.type === "check" ? () => void toggle(habit) : undefined}
-              />
-            ))}
+            {habitGroups.map(([groupName, groupHabits]) => <View key={groupName || "ungrouped"} style={{ gap: 2 }}>
+              {groupName ? <Label secondary style={[styles.caption, { paddingTop: 14 }]}>{groupName}</Label> : null}
+              {groupHabits.map((habit) => habit.type === "check" ? (
+                <HabitRow key={habit.id} habit={habit} completed={habit.completedToday} onToggle={() => void toggle(habit)} />
+              ) : (
+                <RichTodayRow key={habit.id} habit={habit} onSave={saveRichProgress} onState={setRichState} onUndo={undoRichProgress} />
+              ))}
+            </View>)}
           </View>
           <Label secondary style={[styles.caption, { textAlign: "center" }]}>
             {t("toggleCheckin")}
@@ -202,4 +247,35 @@ function SavedToday({ now }: { now: Date }) {
       )}
     </Screen>
   );
+}
+
+function RichTodayRow({ habit, onSave, onState, onUndo }: {
+  habit: TodayHabit;
+  onSave: (habit: TodayHabit, value: number, state?: ProgressState) => Promise<void>;
+  onState: (habit: TodayHabit, state: Extract<ProgressState, "failed" | "skipped">) => Promise<void>;
+  onUndo: (habit: TodayHabit) => Promise<void>;
+}) {
+  const { colors } = useTheme();
+  const { t } = useTranslation();
+  const [input, setInput] = useState(String(habit.progressValue));
+  const step = habit.type === "count" ? 1 : Math.max(habit.targetValue / 4, habit.type === "duration" ? 60 : 0.1);
+  const terminal = habit.progressState === "failed" || habit.progressState === "skipped";
+  const update = (value: number) => { setInput(String(value)); void onSave(habit, value); };
+  return <View style={{ paddingVertical: 16, gap: 10, borderBottomWidth: 1, borderColor: colors.border }}>
+    <View style={styles.between}>
+      <View style={{ flex: 1, gap: 3 }}><Label style={{ fontWeight: "600" }}>{habit.name}</Label><Label secondary style={styles.caption}>{terminal ? habit.progressState === "skipped" ? "Skipped" : "Failed" : `${habit.progressValue} / ${habit.targetValue}${habit.unit ? ` ${habit.unit}` : ""}`}</Label></View>
+      <View style={[styles.row, { gap: 8 }]}>
+        <Pressable accessibilityRole="button" accessibilityLabel={`${habit.name} decrease progress`} onPress={() => update(Math.max(0, habit.progressValue - step))} style={{ minWidth: 44, minHeight: 44, borderRadius: 12, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}><Label>−</Label></Pressable>
+        <TextInput accessibilityLabel={`${habit.name} progress`} value={input} onChangeText={setInput} onSubmitEditing={() => { const value = Number(input.replace(",", ".")); if (Number.isFinite(value) && value >= 0) void onSave(habit, value); }} keyboardType="decimal-pad" selectTextOnFocus style={{ width: 64, minHeight: 44, textAlign: "center", color: colors.textPrimary, backgroundColor: colors.surface, borderRadius: 12 }} />
+        <Pressable accessibilityRole="button" accessibilityLabel={`${habit.name} increase progress`} onPress={() => update(habit.progressValue + step)} style={{ minWidth: 44, minHeight: 44, borderRadius: 12, backgroundColor: colors.successSoft, alignItems: "center", justifyContent: "center" }}><Label>+</Label></Pressable>
+      </View>
+    </View>
+    <View style={[styles.row, { gap: 8 }]}>
+      {terminal ? <Pressable accessibilityRole="button" accessibilityLabel={`${habit.name} undo progress`} onPress={() => void onUndo(habit)}><Label secondary style={styles.caption}>Undo</Label></Pressable> : <>
+        <Pressable accessibilityRole="button" accessibilityLabel={`${habit.name} skip`} onPress={() => void onState(habit, "skipped")}><Label secondary style={styles.caption}>Skip</Label></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel={`${habit.name} fail`} onPress={() => void onState(habit, "failed")}><Label secondary style={styles.caption}>Fail</Label></Pressable>
+      </>}
+      {habit.progressState === "completed" ? <Label style={[styles.caption, { color: colors.success }]}>{t("doneToday")}</Label> : null}
+    </View>
+  </View>;
 }

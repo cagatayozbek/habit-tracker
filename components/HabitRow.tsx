@@ -62,7 +62,9 @@ export function HabitRow({
             ? completed
               ? t("doneToday")
               : habit.subtitle ?? t("ready")
-            : `${t("everyDay")} · ${habit.streak} ${t("dayStreak")}`}
+            : habit.subtitle ?? (habit.streak === undefined
+              ? t("ready")
+              : `${t("everyDay")} · ${habit.streak} ${t("dayStreak")}`)}
         </Label>
       </View>
       {onToggle ? (

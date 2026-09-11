@@ -55,9 +55,22 @@ function SavedHabits() {
       };
   }, [repo, retry, t]),
   );
-  const visible = habits.filter(
-    (habit) => Boolean(habit.archivedAt) === archived,
-  );
+  const visible = habits
+    .filter((habit) => Boolean(habit.archivedAt) === archived)
+    .sort((left, right) => left.sortOrder - right.sortOrder);
+  const move = async (id: string, direction: -1 | 1) => {
+    const index = visible.findIndex((habit) => habit.id === id);
+    const next = index + direction;
+    if (index < 0 || next < 0 || next >= visible.length) return;
+    const reordered = [...visible];
+    [reordered[index], reordered[next]] = [reordered[next], reordered[index]];
+    setHabits((current) => {
+      const order = new Map(reordered.map((habit, position) => [habit.id, position + 1]));
+      return current.map((habit) => order.has(habit.id) ? { ...habit, sortOrder: order.get(habit.id)! } : habit);
+    });
+    try { await repo.reorder(reordered.map((habit) => habit.id)); }
+    catch { setError(t("saveError")); setRetry((value) => value + 1); }
+  };
   return (
     <Screen>
       <ScreenHeader title={t("habits")} subtitle={t("makeRoom")} />
@@ -108,17 +121,8 @@ function SavedHabits() {
       ) : (
         <View>
           {visible.map((habit) => (
-            <Pressable
+            <View
               key={habit.id}
-              accessibilityRole="button"
-              accessibilityLabel={`${t("editHabit")} ${habit.name}`}
-              accessibilityHint={t("opensEditor")}
-              onPress={() =>
-                router.push({
-                  pathname: "/habit/[id]",
-                  params: { id: habit.id },
-                })
-              }
               style={[
                 styles.row,
                 {
@@ -128,25 +132,16 @@ function SavedHabits() {
                 },
               ]}
             >
-              <Ionicons
-                name={
-                  icons.find((icon) => icon === habit.icon) ?? "leaf-outline"
-                }
-                size={26}
-                color={habit.color}
-              />
-              <View style={{ flex: 1, gap: 6 }}>
-                <Label style={{ fontWeight: "600" }}>{habit.name}</Label>
-                <Label secondary style={styles.caption}>
-                  {scheduleLabel(habit.frequencyType, habit.scheduledDays, language)}
-                </Label>
-              </View>
-              <Ionicons
-                name="chevron-forward"
-                size={20}
-                color={colors.textSecondary}
-              />
-            </Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel={`${t("editHabit")} ${habit.name}`} accessibilityHint={t("opensEditor")} onPress={() => router.push({ pathname: "/habit/[id]", params: { id: habit.id } })} style={[styles.row, { flex: 1 }]}>
+                <Ionicons name={icons.find((icon) => icon === habit.icon) ?? "leaf-outline"} size={26} color={habit.color} />
+                <View style={{ flex: 1, gap: 6 }}><Label style={{ fontWeight: "600" }}>{habit.name}</Label><Label secondary style={styles.caption}>{scheduleLabel(habit.frequencyType, habit.scheduledDays, language)}</Label></View>
+                <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+              </Pressable>
+              {!archived ? <View style={{ gap: 2 }}>
+                <Pressable accessibilityRole="button" accessibilityLabel={`${habit.name} move up`} disabled={visible[0]?.id === habit.id} onPress={() => void move(habit.id, -1)} style={{ minWidth: 36, minHeight: 28, alignItems: "center", justifyContent: "center" }}><Ionicons name="chevron-up" size={18} color={colors.textSecondary} /></Pressable>
+                <Pressable accessibilityRole="button" accessibilityLabel={`${habit.name} move down`} disabled={visible.at(-1)?.id === habit.id} onPress={() => void move(habit.id, 1)} style={{ minWidth: 36, minHeight: 28, alignItems: "center", justifyContent: "center" }}><Ionicons name="chevron-down" size={18} color={colors.textSecondary} /></Pressable>
+              </View> : null}
+            </View>
           ))}
         </View>
       )}

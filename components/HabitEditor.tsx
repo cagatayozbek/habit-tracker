@@ -1,4 +1,4 @@
-import { currentTimestamp } from "../lib/dates";
+import { currentTimestamp, localDateKey } from "../lib/dates";
 import { useRef, useState } from "react";
 import {
   Alert,
@@ -15,7 +15,7 @@ import { Screen, Label, styles } from "./ui";
 import { ActionButton } from "./ActionButton";
 import { useTheme } from "../theme/ThemeProvider";
 import { useHabitRepository } from "../hooks/useHabitRepository";
-import type { Habit } from "../features/habits/habit.types";
+import type { Habit, HabitSchedule } from "../features/habits/habit.types";
 import {
   icons,
   colorOptions,
@@ -44,10 +44,14 @@ export function HabitEditor({ habit }: { habit?: Habit }) {
   const [targetValue, setTargetValue] = useState(String(habit?.targetValue ?? 1));
   const [unit, setUnit] = useState(habit?.unit ?? "");
   const [goalPeriod, setGoalPeriod] = useState<Habit["goalPeriod"]>(habit?.goalPeriod ?? "daily");
-  const [frequency, setFrequency] = useState<Habit["frequencyType"]>(
-    habit?.frequencyType ?? "daily",
-  );
+  const [groupName, setGroupName] = useState(habit?.groupName ?? "");
+  const [scheduleType, setScheduleType] = useState<HabitSchedule["type"]>(habit?.schedule?.type ?? (habit?.frequencyType === "specific_days" ? "weekdays" : "daily"));
   const [days, setDays] = useState(habit?.scheduledDays ?? [1, 3, 5]);
+  const [monthDays, setMonthDays] = useState(habit?.schedule?.daysOfMonth.join(", ") ?? "");
+  const [occurrences, setOccurrences] = useState(habit?.schedule?.occurrences?.toString() ?? "1");
+  const [intervalDays, setIntervalDays] = useState(habit?.schedule?.intervalDays?.toString() ?? "2");
+  const [scheduleStart, setScheduleStart] = useState(habit?.schedule?.startDate ?? localDateKey(new Date()));
+  const [scheduleEnd, setScheduleEnd] = useState(habit?.schedule?.endDate ?? "");
   const [reminderEnabled, setReminderEnabled] = useState(
     habit?.reminderEnabled ?? false,
   );
@@ -80,8 +84,15 @@ export function HabitEditor({ habit }: { habit?: Habit }) {
       setError(t("nameRequired"));
       return;
     }
-    if (frequency === "specific_days" && !days.length) {
+    if (scheduleType === "weekdays" && !days.length) {
       setError(t("dayRequired"));
+      return;
+    }
+    const parsedMonthDays = monthDays.trim() ? monthDays.split(",").map((value) => Number(value.trim())) : [];
+    const parsedOccurrences = Number(occurrences);
+    const parsedInterval = Number(intervalDays);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(scheduleStart) || (scheduleEnd && !/^\d{4}-\d{2}-\d{2}$/.test(scheduleEnd)) || (scheduleType === "days_of_month" && !parsedMonthDays.length) || (["times_per_week", "times_per_month"].includes(scheduleType) && (!Number.isInteger(parsedOccurrences) || parsedOccurrences < 1)) || (scheduleType === "interval" && (!Number.isInteger(parsedInterval) || parsedInterval < 1))) {
+      setError("Enter a valid schedule.");
       return;
     }
     const parsedTarget = Number(targetValue.replace(",", "."));
@@ -104,14 +115,24 @@ export function HabitEditor({ habit }: { habit?: Habit }) {
         targetValue: type === "check" ? 1 : parsedTarget,
         unit: type === "check" ? null : unit.trim() || null,
         goalPeriod,
-        frequencyType: frequency,
-        scheduledDays: frequency === "daily" ? [] : [...days].sort(),
+        groupId: habit?.groupId ?? null,
+        sortOrder: habit?.sortOrder ?? Date.now(),
+        schedule: {
+          type: scheduleType,
+          weekdays: scheduleType === "weekdays" ? [...days].sort() : [],
+          daysOfMonth: scheduleType === "days_of_month" ? parsedMonthDays : [],
+          intervalDays: scheduleType === "interval" ? parsedInterval : null,
+          occurrences: ["times_per_week", "times_per_month"].includes(scheduleType) ? parsedOccurrences : null,
+          startDate: scheduleStart, endDate: scheduleEnd || null,
+        },
+        frequencyType: scheduleType === "daily" ? "daily" : "specific_days",
+        scheduledDays: scheduleType === "weekdays" ? [...days].sort() : [],
         reminderEnabled,
         reminderTime: reminderEnabled ? reminderTime : null,
         createdAt: habit?.createdAt ?? now,
         archivedAt: habit?.archivedAt ?? null,
       };
-      await repo.save(savedHabit);
+      await repo.save(savedHabit, groupName || null);
       await syncHabitReminders(savedHabit).catch(() => undefined);
     });
   };
@@ -175,6 +196,7 @@ export function HabitEditor({ habit }: { habit?: Habit }) {
               <Pressable key={option} disabled={busy} accessibilityRole="radio" accessibilityState={{ checked: type === option }} onPress={() => setType(option)} style={{ padding: 12, borderRadius: 12, backgroundColor: type === option ? colors.successSoft : colors.surface }}><Label>{option[0].toUpperCase() + option.slice(1)}</Label></Pressable>
             ))}
           </View>
+          <TextInput accessibilityLabel="Habit group" placeholder="Optional group (e.g. Health)" placeholderTextColor={colors.textSecondary} value={groupName} onChangeText={setGroupName} editable={!busy} maxLength={40} style={{ color: colors.textPrimary, backgroundColor: colors.surface, padding: 16, borderRadius: 16, fontSize: 17, minHeight: 54 }} />
           {type !== "check" ? <View style={[styles.row, { gap: 8 }]}>
             <TextInput accessibilityLabel="Target value" keyboardType="decimal-pad" value={targetValue} onChangeText={setTargetValue} editable={!busy} style={{ flex: 1, color: colors.textPrimary, backgroundColor: colors.surface, padding: 16, borderRadius: 16, fontSize: 17, minHeight: 54 }} />
             <TextInput accessibilityLabel="Unit" placeholder={type === "duration" ? "seconds" : "Unit"} placeholderTextColor={colors.textSecondary} value={unit} onChangeText={setUnit} editable={!busy} maxLength={24} style={{ flex: 1, color: colors.textPrimary, backgroundColor: colors.surface, padding: 16, borderRadius: 16, fontSize: 17, minHeight: 54 }} />
@@ -242,13 +264,13 @@ export function HabitEditor({ habit }: { habit?: Habit }) {
         </View>
         <View style={{ gap: 16 }}>
           <Label style={styles.heading}>{t("frequency")}</Label>
-          {(["daily", "specific_days"] as const).map((option) => (
+          {(["daily", "weekdays", "times_per_week", "times_per_month", "days_of_month", "interval"] as const).map((option) => (
             <Pressable
               disabled={busy}
               key={option}
               accessibilityRole="radio"
-              accessibilityState={{ checked: frequency === option }}
-              onPress={() => setFrequency(option)}
+              accessibilityState={{ checked: scheduleType === option }}
+              onPress={() => setScheduleType(option)}
               style={[
                 styles.between,
                 {
@@ -260,14 +282,14 @@ export function HabitEditor({ habit }: { habit?: Habit }) {
               ]}
             >
               <Label>
-                {option === "daily" ? t("everyDay") : t("specificWeekdays")}
+                {option === "daily" ? t("everyDay") : option === "weekdays" ? t("specificWeekdays") : option === "times_per_week" ? "Times per week" : option === "times_per_month" ? "Times per month" : option === "days_of_month" ? "Days of month" : "Every N days"}
               </Label>
-              {frequency === option ? (
+              {scheduleType === option ? (
                 <Ionicons name="checkmark" size={22} color={colors.success} />
               ) : null}
             </Pressable>
           ))}
-          {frequency === "specific_days" ? (
+          {scheduleType === "weekdays" ? (
             <View style={[styles.row, { flexWrap: "wrap", gap: 8 }]}>
               {weekdays.map((day, index) => (
                 <Pressable
@@ -298,6 +320,11 @@ export function HabitEditor({ habit }: { habit?: Habit }) {
               ))}
             </View>
           ) : null}
+          {scheduleType === "days_of_month" ? <TextInput accessibilityLabel="Days of month" placeholder="e.g. 1, 15, 30" placeholderTextColor={colors.textSecondary} value={monthDays} onChangeText={setMonthDays} keyboardType="number-pad" style={{ color: colors.textPrimary, backgroundColor: colors.surface, padding: 16, borderRadius: 16, fontSize: 17, minHeight: 54 }} /> : null}
+          {["times_per_week", "times_per_month"].includes(scheduleType) ? <TextInput accessibilityLabel="Occurrences" placeholder="Times" placeholderTextColor={colors.textSecondary} value={occurrences} onChangeText={setOccurrences} keyboardType="number-pad" style={{ color: colors.textPrimary, backgroundColor: colors.surface, padding: 16, borderRadius: 16, fontSize: 17, minHeight: 54 }} /> : null}
+          {scheduleType === "interval" ? <TextInput accessibilityLabel="Interval days" placeholder="Every N days" placeholderTextColor={colors.textSecondary} value={intervalDays} onChangeText={setIntervalDays} keyboardType="number-pad" style={{ color: colors.textPrimary, backgroundColor: colors.surface, padding: 16, borderRadius: 16, fontSize: 17, minHeight: 54 }} /> : null}
+          <TextInput accessibilityLabel="Schedule start date" placeholder="YYYY-MM-DD" placeholderTextColor={colors.textSecondary} value={scheduleStart} onChangeText={setScheduleStart} style={{ color: colors.textPrimary, backgroundColor: colors.surface, padding: 16, borderRadius: 16, fontSize: 17, minHeight: 54 }} />
+          <TextInput accessibilityLabel="Schedule end date" placeholder="Optional end date (YYYY-MM-DD)" placeholderTextColor={colors.textSecondary} value={scheduleEnd} onChangeText={setScheduleEnd} style={{ color: colors.textPrimary, backgroundColor: colors.surface, padding: 16, borderRadius: 16, fontSize: 17, minHeight: 54 }} />
         </View>
         <View style={{ gap: 12 }}>
           <Label style={styles.heading}>{t("reminder")}</Label>
