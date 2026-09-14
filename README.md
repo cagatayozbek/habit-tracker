@@ -22,6 +22,74 @@ npx eas-cli@latest submit --platform ios --profile production
 The App Store Connect app record must use the same bundle identifier. Invite
 TestFlight testers only after the submitted build has finished processing.
 
+## Pending Apple Developer setup — iCloud Sync (Phase 20)
+
+Cloud sync is intentionally not enabled until the following Apple Developer
+account work is complete. Local SQLite remains the source of truth in the
+meantime; turning on an entitlement without a provisioned CloudKit container
+must not be treated as a working sync release.
+
+1. In **Certificates, Identifiers & Profiles**, enable **iCloud** and **Push
+   Notifications** for `com.furkanozbek.habit-tracker`.
+2. Create the private CloudKit container
+   `iCloud.com.furkanozbek.habit-tracker`, associate it with that App ID, and
+   enable the CloudKit service.
+3. Create or regenerate development, Ad Hoc/TestFlight, and App Store
+   provisioning profiles after the capabilities change. Enable background
+   remote notifications for the app target.
+4. In CloudKit Dashboard, deploy the development schema to production only
+   after two-device testing passes. Do not use a public database for personal
+   habit data.
+5. Test with two signed-in physical devices: offline edits, reconnect,
+   concurrent edits, deletes/tombstones, sign-out, and a CloudKit service
+   outage. Confirm sync errors cannot overwrite or delete local data.
+
+The planned implementation uses CloudKit's private database and `CKSyncEngine`.
+It requires persisted sync-engine state plus app-specific handling for conflicts;
+the local conflict ordering is revision, timestamp, then device identifier.
+
+## Deferred Apple-platform verification
+
+These checks require signing capabilities, provisioned identifiers, or physical
+hardware and are intentionally deferred until the Apple Developer account is
+available:
+
+- Enable and provision App Groups for widgets/App Intents, HealthKit, Siri,
+  WatchConnectivity, iCloud/CloudKit, and remote notifications on every related
+  app/extension identifier.
+- Verify widget interactive actions and Lock Screen families on a signed iPhone;
+  confirm archived/deleted habits disappear from snapshots.
+- Run Siri/App Intent actions from Siri and Shortcuts, including invalid and
+  archived habit handling.
+- Verify Health permissions and imports for steps, distance, workouts, mindful
+  minutes, and water with real Health data.
+- Verify phone/Watch offline actions, reconnect convergence, timer controls,
+  complication/Smart Stack behavior, and background delivery on a paired Watch.
+- Verify reminder delivery, completion cancellation, multiple daily times,
+  incomplete follow-ups, and duration-timer goal alerts on a physical iPhone.
+- Create the production EAS build, upload it to App Store Connect, complete
+  TestFlight smoke testing, then run the documented 14-day and 30-day validation.
+
+All of these are release gates; simulator or unsigned builds are not evidence
+that the corresponding system integration works on hardware.
+
+## V2 local implementation status
+
+Phases 10–19 and the local portions of Phases 20–23 are implemented. The latest
+local pass adds persistent duration timer controls, daily/Today/single-habit and
+heatmap widgets, validated transactional backup/restore, deterministic sync
+metadata, search/filter/sort/drag ordering, templates, duplication, confirmed
+bulk archive, multiple schedule-aware reminders, incomplete follow-ups, timer
+goal alerts, and uncapped Dynamic Type text scaling.
+
+Validation on September 14, 2026: TypeScript and lint pass, 27 domain/database
+tests pass, Expo dependency compatibility passes, production iOS JS export
+passes, native prebuild and CocoaPods installation pass, and the Watch extension
+compiles directly for watchOS Simulator. A combined unsigned iOS scheme build is
+currently blocked by Xcode evaluating the legacy Watch app product types under
+the iOS Simulator destination; signed device/TestFlight verification remains in
+the deferred checklist above.
+
 ## Run
 
 Use Node.js 22.13+ (verified with Node 24) and npm.

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, Pressable, TextInput, View } from "react-native";
 import { useFocusEffect } from "expo-router";
 import { Screen, Label, styles } from "../../components/ui";
@@ -21,11 +21,17 @@ import {
 import { completionPercentage } from "../../lib/progress";
 import { localIdentifier } from "../../lib/ids";
 import { useTheme } from "../../theme/ThemeProvider";
-import { syncHabitReminders } from "../../features/notifications/notification.service";
+import { cancelTimerReminder, syncHabitReminders, syncTimerReminder } from "../../features/notifications/notification.service";
 import { useTranslation } from "../../lib/i18n";
 import { selectionHaptic } from "../../lib/haptics";
 import { progressStateForValue } from "../../lib/goals";
 import type { ProgressState } from "../../features/completions/completion.types";
+import DailyProgressWidget from "../../widgets/DailyProgressWidget";
+import { notifyWatchDataChanged } from "../../components/WatchConnectivityProvider";
+import { useTimerService } from "../../hooks/useTimerService";
+import type { HabitTimer } from "../../features/timer/timer.service";
+import TodayHabitsWidget from "../../widgets/TodayHabitsWidget";
+import SingleHabitWidget from "../../widgets/SingleHabitWidget";
 
 export default function Today() {
   const now = useLocalToday();
@@ -45,6 +51,7 @@ function SavedToday({ now }: { now: Date }) {
   const habitsRepo = useHabitRepository();
   const completionsRepo = useCompletionRepository();
   const progressRepo = useProgressRepository();
+  const timerService = useTimerService();
   const { colors } = useTheme();
   const { t, language } = useTranslation();
   const date = localDateKey(now);
@@ -53,19 +60,39 @@ function SavedToday({ now }: { now: Date }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
+  const [timer, setTimer] = useState<HabitTimer | null>(null);
+  const [, setTimerTick] = useState(0);
   const pending = useRef(new Set<string>());
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setHabits(await habitsRepo.listScheduledForDate(date, weekday));
+      const [scheduled, savedTimer] = await Promise.all([
+        habitsRepo.listScheduledForDate(date, weekday),
+        timerService.get(),
+      ]);
+      setHabits(scheduled);
+      setTimer(savedTimer);
+      if (Platform.OS === "ios") {
+        const completed = scheduled.filter((habit) => habit.completedToday).length;
+        DailyProgressWidget.updateSnapshot({ completed, total: scheduled.length, percentage: completionPercentage(completed, scheduled.length), label: "Today" });
+        TodayHabitsWidget.updateSnapshot({ habits: scheduled.map((habit) => ({ id: habit.id, name: habit.name, completed: habit.completedToday })) });
+        const first = scheduled[0];
+        if (first) SingleHabitWidget.updateSnapshot({ id: first.id, name: first.name, value: first.progressValue, target: first.targetValue, completed: first.completedToday, type: first.type });
+      }
       setError("");
     } catch {
       setError(t("loadTodayError"));
     } finally {
       setLoading(false);
     }
-  }, [date, habitsRepo, t, weekday]);
+  }, [date, habitsRepo, t, timerService, weekday]);
+
+  useEffect(() => {
+    if (!timer?.startedAt) return;
+    const interval = setInterval(() => setTimerTick((value) => value + 1), 1000);
+    return () => clearInterval(interval);
+  }, [timer?.startedAt]);
 
   useFocusEffect(
     useCallback(() => {
@@ -111,6 +138,7 @@ function SavedToday({ now }: { now: Date }) {
       await syncHabitReminders(habit, { completedToday }).catch(
         () => undefined,
       );
+      notifyWatchDataChanged();
       setError("");
     } catch {
       setHabits((current) =>
@@ -136,6 +164,7 @@ function SavedToday({ now }: { now: Date }) {
     try {
       await progressRepo.save({ id: localIdentifier(), habitId: habit.id, localDate: date, value, state, recordedAt: currentTimestamp(), note: null }, habit.targetValue);
       selectionHaptic();
+      notifyWatchDataChanged();
       setError("");
     } catch {
       await load();
@@ -150,6 +179,7 @@ function SavedToday({ now }: { now: Date }) {
     try {
       await progressRepo.setState(habit.id, date, state, localIdentifier(), currentTimestamp());
       selectionHaptic();
+      notifyWatchDataChanged();
       setError("");
     } catch { await load(); setError(t("saveCheckinError")); }
     finally { pending.current.delete(habit.id); }
@@ -159,9 +189,30 @@ function SavedToday({ now }: { now: Date }) {
     if (pending.current.has(habit.id)) return;
     pending.current.add(habit.id);
     setHabits((current) => current.map((item) => item.id === habit.id ? { ...item, progressValue: 0, progressState: null, completedToday: false } : item));
-    try { await progressRepo.remove(habit.id, date); selectionHaptic(); setError(""); }
+    try { await progressRepo.remove(habit.id, date); selectionHaptic(); notifyWatchDataChanged(); setError(""); }
     catch { await load(); setError(t("saveCheckinError")); }
     finally { pending.current.delete(habit.id); }
+  };
+
+  const startTimer = async (habit: TodayHabit) => {
+    try { const started = await timerService.start(habit.id, currentTimestamp()); setTimer(started); await syncTimerReminder(habit, started.accumulatedSeconds).catch(() => undefined); setError(""); }
+    catch { setError("Another duration timer is already running."); }
+  };
+
+  const pauseTimer = async () => {
+    try { const paused = await timerService.pause(currentTimestamp()); setTimer(paused); if (paused) await cancelTimerReminder(paused.habitId).catch(() => undefined); setError(""); }
+    catch { setError("The timer could not be paused."); }
+  };
+
+  const finishTimer = async (habit: TodayHabit) => {
+    try {
+      const stopped = await timerService.pause(currentTimestamp());
+      if (!stopped || stopped.habitId !== habit.id) return;
+      await saveRichProgress(habit, habit.progressValue + stopped.accumulatedSeconds);
+      await timerService.clear();
+      await cancelTimerReminder(habit.id).catch(() => undefined);
+      setTimer(null);
+    } catch { setError("The timer could not be saved."); }
   };
 
   return (
@@ -236,7 +287,7 @@ function SavedToday({ now }: { now: Date }) {
               {groupHabits.map((habit) => habit.type === "check" ? (
                 <HabitRow key={habit.id} habit={habit} completed={habit.completedToday} onToggle={() => void toggle(habit)} />
               ) : (
-                <RichTodayRow key={habit.id} habit={habit} onSave={saveRichProgress} onState={setRichState} onUndo={undoRichProgress} />
+                <RichTodayRow key={habit.id} habit={habit} timer={timer} onStartTimer={startTimer} onPauseTimer={pauseTimer} onFinishTimer={finishTimer} onSave={saveRichProgress} onState={setRichState} onUndo={undoRichProgress} />
               ))}
             </View>)}
           </View>
@@ -249,8 +300,25 @@ function SavedToday({ now }: { now: Date }) {
   );
 }
 
-function RichTodayRow({ habit, onSave, onState, onUndo }: {
+function timerSeconds(timer: HabitTimer): number {
+  if (!timer.startedAt) return timer.accumulatedSeconds;
+  return timer.accumulatedSeconds + Math.max(0, (Date.now() - Date.parse(timer.startedAt)) / 1000);
+}
+
+function formatTimer(seconds: number): string {
+  const whole = Math.floor(seconds);
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const remainder = whole % 60;
+  return `${hours ? `${hours}:` : ""}${String(minutes).padStart(hours ? 2 : 1, "0")}:${String(remainder).padStart(2, "0")}`;
+}
+
+function RichTodayRow({ habit, timer, onStartTimer, onPauseTimer, onFinishTimer, onSave, onState, onUndo }: {
   habit: TodayHabit;
+  timer: HabitTimer | null;
+  onStartTimer: (habit: TodayHabit) => Promise<void>;
+  onPauseTimer: () => Promise<void>;
+  onFinishTimer: (habit: TodayHabit) => Promise<void>;
   onSave: (habit: TodayHabit, value: number, state?: ProgressState) => Promise<void>;
   onState: (habit: TodayHabit, state: Extract<ProgressState, "failed" | "skipped">) => Promise<void>;
   onUndo: (habit: TodayHabit) => Promise<void>;
@@ -260,6 +328,8 @@ function RichTodayRow({ habit, onSave, onState, onUndo }: {
   const [input, setInput] = useState(String(habit.progressValue));
   const step = habit.type === "count" ? 1 : Math.max(habit.targetValue / 4, habit.type === "duration" ? 60 : 0.1);
   const terminal = habit.progressState === "failed" || habit.progressState === "skipped";
+  const thisTimer = timer?.habitId === habit.id ? timer : null;
+  const timerUnavailable = Boolean(timer && !thisTimer);
   const update = (value: number) => { setInput(String(value)); void onSave(habit, value); };
   return <View style={{ paddingVertical: 16, gap: 10, borderBottomWidth: 1, borderColor: colors.border }}>
     <View style={styles.between}>
@@ -277,5 +347,12 @@ function RichTodayRow({ habit, onSave, onState, onUndo }: {
       </>}
       {habit.progressState === "completed" ? <Label style={[styles.caption, { color: colors.success }]}>{t("doneToday")}</Label> : null}
     </View>
+    {habit.type === "duration" ? <View style={[styles.between, { backgroundColor: colors.surface, borderRadius: 12, padding: 10 }]}>
+      <Label accessibilityLiveRegion="polite" style={{ fontVariant: ["tabular-nums"], fontWeight: "600" }}>{thisTimer ? formatTimer(timerSeconds(thisTimer)) : "0:00"}</Label>
+      <View style={[styles.row, { gap: 12 }]}>
+        {thisTimer?.startedAt ? <Pressable accessibilityRole="button" onPress={() => void onPauseTimer()}><Label>Pause</Label></Pressable> : <Pressable accessibilityRole="button" disabled={timerUnavailable} onPress={() => void onStartTimer(habit)}><Label secondary={timerUnavailable}>{thisTimer ? "Resume" : "Start"}</Label></Pressable>}
+        {thisTimer ? <Pressable accessibilityRole="button" onPress={() => void onFinishTimer(habit)}><Label style={{ color: colors.success }}>Finish</Label></Pressable> : null}
+      </View>
+    </View> : null}
   </View>;
 }

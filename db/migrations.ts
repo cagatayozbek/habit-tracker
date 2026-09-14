@@ -63,7 +63,50 @@ ALTER TABLE habits ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
 UPDATE habits SET sort_order = rowid WHERE sort_order = 0;
 CREATE INDEX habits_group_order ON habits(group_id, sort_order, created_at);
 `;
-export const migrations = [{ version: 1, sql: initialSchema }, { version: 2, sql: richHabitMigration }, { version: 3, sql: scheduleHistoryMigration }, { version: 4, sql: dailyExperienceMigration }];
+const timerMigration = `
+CREATE TABLE habit_timer (
+  singleton_id INTEGER PRIMARY KEY NOT NULL CHECK(singleton_id = 1),
+  habit_id TEXT NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+  started_at TEXT,
+  accumulated_seconds REAL NOT NULL DEFAULT 0 CHECK(accumulated_seconds >= 0),
+  CHECK(started_at IS NOT NULL OR accumulated_seconds > 0)
+);
+`;
+const healthKitMigration = `
+ALTER TABLE progress_entries ADD COLUMN manual_value REAL NOT NULL DEFAULT 0 CHECK(manual_value >= 0);
+ALTER TABLE progress_entries ADD COLUMN health_value REAL NOT NULL DEFAULT 0 CHECK(health_value >= 0);
+UPDATE progress_entries SET manual_value = value;
+CREATE TABLE habit_health_mappings (
+  habit_id TEXT PRIMARY KEY NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+  metric TEXT NOT NULL CHECK(metric IN ('steps', 'distance', 'workouts', 'mindful_minutes', 'water')),
+  last_synced_at TEXT
+);
+CREATE TABLE habit_health_values (
+  habit_id TEXT NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+  local_date TEXT NOT NULL,
+  metric TEXT NOT NULL,
+  value REAL NOT NULL CHECK(value >= 0),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(habit_id, local_date)
+);
+`;
+const cloudSyncMigration = `
+CREATE TABLE sync_state (
+  singleton_id INTEGER PRIMARY KEY NOT NULL CHECK(singleton_id = 1),
+  enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
+  revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+  updated_at TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0, 1)),
+  last_error TEXT
+);
+`;
+const advancedRemindersMigration = `
+ALTER TABLE habits ADD COLUMN reminder_times TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE habits ADD COLUMN follow_up_minutes INTEGER CHECK(follow_up_minutes IS NULL OR follow_up_minutes > 0);
+UPDATE habits SET reminder_times = CASE WHEN reminder_enabled = 1 AND reminder_time IS NOT NULL THEN '["' || reminder_time || '"]' ELSE '[]' END;
+`;
+export const migrations = [{ version: 1, sql: initialSchema }, { version: 2, sql: richHabitMigration }, { version: 3, sql: scheduleHistoryMigration }, { version: 4, sql: dailyExperienceMigration }, { version: 5, sql: timerMigration }, { version: 6, sql: healthKitMigration }, { version: 7, sql: cloudSyncMigration }, { version: 8, sql: advancedRemindersMigration }];
 export async function migrateDatabase(db: Database) {
   await db.execAsync(
     "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;",

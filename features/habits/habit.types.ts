@@ -49,6 +49,8 @@ export interface Habit {
   scheduledDays: number[];
   reminderEnabled: boolean;
   reminderTime: string | null;
+  reminderTimes?: string[];
+  followUpMinutes?: number | null;
   createdAt: string;
   archivedAt: string | null;
 }

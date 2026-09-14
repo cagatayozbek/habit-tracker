@@ -12,14 +12,12 @@ import { spacing, typography } from "../theme/tokens";
 export function Label({
   style,
   secondary = false,
-  maxFontSizeMultiplier = 1.5,
   ...props
 }: TextProps & { secondary?: boolean }) {
   const { colors } = useTheme();
   return (
     <Text
       {...props}
-      maxFontSizeMultiplier={maxFontSizeMultiplier}
       style={[
         {
           color: secondary ? colors.textSecondary : colors.textPrimary,

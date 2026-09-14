@@ -13,9 +13,20 @@
     ],
     "ios": {
       "supportsTablet": false,
-      "buildNumber": "1"
+      "buildNumber": "1",
+      "bundleIdentifier": "com.furkanozbek.habit-tracker"
     },
     "plugins": [
+      "./plugins/withHabitTrackerAppIntents",
+      "./plugins/withHabitTrackerWatch",
+      [
+        "@kingstinct/react-native-healthkit",
+        {
+          "NSHealthShareUsageDescription": "Habit Tracker reads only the Apple Health metrics you connect to a habit.",
+          "NSHealthUpdateUsageDescription": false,
+          "background": false
+        }
+      ],
       "expo-router",
       "expo-sqlite",
       [
@@ -33,6 +44,42 @@
           "image": "./assets/splash-production.png",
           "imageWidth": 210,
           "resizeMode": "contain"
+        }
+      ],
+      [
+        "expo-widgets",
+        {
+          "widgets": [
+            {
+              "name": "DailyProgressWidget",
+              "displayName": "Daily Progress",
+              "description": "Today's habit completion at a glance.",
+              "supportedFamilies": [
+                "systemSmall",
+                "systemMedium",
+                "accessoryCircular",
+                "accessoryRectangular"
+              ]
+            },
+            {
+              "name": "ConsistencyHeatmapWidget",
+              "displayName": "Consistency",
+              "description": "A six-month view of your habit consistency.",
+              "supportedFamilies": ["systemMedium", "systemLarge"]
+            },
+            {
+              "name": "TodayHabitsWidget",
+              "displayName": "Today Habits",
+              "description": "Complete today's habits without opening the app.",
+              "supportedFamilies": ["systemMedium", "systemLarge", "accessoryRectangular"]
+            },
+            {
+              "name": "SingleHabitWidget",
+              "displayName": "Single Habit",
+              "description": "Track one habit from Home or Lock Screen.",
+              "supportedFamilies": ["systemSmall", "accessoryCircular", "accessoryRectangular"]
+            }
+          ]
         }
       ]
     ],

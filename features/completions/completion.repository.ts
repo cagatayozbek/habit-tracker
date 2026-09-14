@@ -43,12 +43,16 @@ export function progressRepository(db: Connection) {
     },
     async save(entry: ProgressEntry, targetValue: number): Promise<void> {
       assertLocalDateKey(entry.localDate);
-      const state = progressStateForValue(entry.value, targetValue, entry.state);
+      const existing = await db.getFirstAsync<{ health_value: number }>("SELECT health_value FROM progress_entries WHERE habit_id = ? AND local_date = ?", entry.habitId, entry.localDate);
+      const healthValue = existing?.health_value ?? 0;
+      const manualValue = Math.max(0, entry.value - healthValue);
+      const value = manualValue + healthValue;
+      const state = progressStateForValue(value, targetValue, entry.state);
       await db.runAsync(
-        `INSERT INTO progress_entries (id, habit_id, local_date, value, state, recorded_at, note)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(habit_id, local_date) DO UPDATE SET value=excluded.value, state=excluded.state, recorded_at=excluded.recorded_at, note=excluded.note`,
-        entry.id, entry.habitId, entry.localDate, entry.value, state, entry.recordedAt, entry.note,
+        `INSERT INTO progress_entries (id, habit_id, local_date, value, state, recorded_at, note, manual_value, health_value)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(habit_id, local_date) DO UPDATE SET value=excluded.value, state=excluded.state, recorded_at=excluded.recorded_at, note=excluded.note, manual_value=excluded.manual_value`,
+        entry.id, entry.habitId, entry.localDate, value, state, entry.recordedAt, entry.note, manualValue, healthValue,
       );
     },
     async setState(habitId: string, localDate: string, state: Extract<ProgressState, "failed" | "skipped">, id: string, recordedAt: string, note: string | null = null): Promise<void> {

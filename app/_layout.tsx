@@ -3,11 +3,15 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { ThemeProvider, useTheme } from "../theme/ThemeProvider";
 import { LocalizationProvider } from "../lib/i18n";
+import { WatchConnectivityProvider } from "../components/WatchConnectivityProvider";
+import { WidgetInteractionProvider } from "../components/WidgetInteractionProvider";
 export default function RootLayout() {
   return (
     <LocalizationProvider>
       <ThemeProvider>
         <DatabaseProvider>
+          <WatchConnectivityProvider />
+          <WidgetInteractionProvider />
           <Navigation />
         </DatabaseProvider>
       </ThemeProvider>

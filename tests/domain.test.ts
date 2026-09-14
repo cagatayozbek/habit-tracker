@@ -6,6 +6,11 @@ import type { Habit } from "../features/habits/habit.types.ts";
 import { calculateStreaks } from "../features/completions/streak.ts";
 import { calculateGoalStreaks, evaluateGoal, evaluateScheduledGoal, goalPeriodBounds, progressStateForValue, targetCompletionPercentage } from "../lib/goals.ts";
 import { expectedOccurrences, scheduleMatchesDate, scheduleMatchesVersionedDate } from "../lib/schedules.ts";
+import { buildReview } from "../lib/review.ts";
+import { intentProgressValue, resolveIntentHabit } from "../lib/appIntent.ts";
+import { aggregateHealthSamples, normalizedValuesForHabit } from "../features/health/health.service.ts";
+import { compatibleHealthMetrics } from "../features/health/health.types.ts";
+import { winner } from "../features/sync/sync.types.ts";
 test("completion percentage handles empty, partial, complete and bounded counts", () => {
   assert.equal(completionPercentage(0, 0), 0);
   assert.equal(completionPercentage(1, 4), 25);
@@ -133,4 +138,42 @@ test("schedule versions preserve historical expectations and goal-period streaks
   const habitGoal = { targetValue: 1, goalPeriod: "monthly" as const };
   assert.deepEqual(evaluateScheduledGoal(habitGoal, versions, entries, "2026-01-20"), { start: "2026-01-01", end: "2026-01-31", value: 1, state: "completed", percentage: 100, expectedOccurrences: 4 });
   assert.deepEqual(calculateGoalStreaks(habitGoal, versions, entries, "2026-03-01"), { current: 2, longest: 2 });
+});
+
+test("weekly review derives totals and prior-period comparison from rich progress", () => {
+  const habit: Habit = { id: "water", name: "Water", icon: "water", color: "#123456", description: null, type: "quantity", targetValue: 2, unit: "L", goalPeriod: "daily", groupId: null, sortOrder: 1, frequencyType: "daily", scheduledDays: [], reminderEnabled: false, reminderTime: null, createdAt: "2026-01-01T00:00:00Z", archivedAt: null };
+  const versions = [{ id: "v", habitId: "water", type: "daily" as const, weekdays: [], daysOfMonth: [], intervalDays: null, occurrences: null, startDate: "2026-01-01", endDate: null, effectiveFrom: "2026-01-01", effectiveUntil: null }];
+  const entries = [{ id: "e", habitId: "water", localDate: "2026-01-05", value: 2, state: "completed" as const, recordedAt: "x", note: null }];
+  const review = buildReview([habit], new Map([[habit.id, entries]]), new Map([[habit.id, versions]]), "2026-01-05");
+  assert.equal(review.habits[0].total, 2);
+  assert.equal(review.recap.achieved, 1);
+});
+
+test("app intents resolve only active habits and reuse canonical target semantics", () => {
+  const active: Habit = { id: "water", name: "Water", icon: "water", color: "#123456", description: null, type: "quantity", targetValue: 2, unit: "L", goalPeriod: "daily", groupId: null, sortOrder: 1, frequencyType: "daily", scheduledDays: [], reminderEnabled: false, reminderTime: null, createdAt: "2026-01-01T00:00:00Z", archivedAt: null };
+  const archived = { ...active, id: "old", name: "Old habit", archivedAt: "2026-09-01T00:00:00Z" };
+  assert.equal(resolveIntentHabit([active, archived], "water")?.id, active.id);
+  assert.equal(resolveIntentHabit([active, archived], "WATER")?.id, active.id);
+  assert.equal(resolveIntentHabit([active, archived], "Old habit"), null);
+  assert.equal(intentProgressValue(active, 0.5, "add-progress", 0.25), 0.75);
+  assert.equal(intentProgressValue(active, 0.5, "complete"), 2);
+  assert.throws(() => intentProgressValue({ type: "check", targetValue: 1 }, 0, "add-progress", 1));
+});
+
+test("Health normalization deduplicates samples and converts reviewed units", () => {
+  const samples = [
+    { id: "a", localDate: "2026-09-14", value: 500 },
+    { id: "a", localDate: "2026-09-14", value: 500 },
+    { id: "b", localDate: "2026-09-14", value: 750 },
+  ];
+  assert.equal(aggregateHealthSamples(samples).get("2026-09-14"), 1250);
+  assert.equal(normalizedValuesForHabit("distance", samples, { type: "quantity", unit: "km" }).get("2026-09-14"), 1.25);
+  assert.deepEqual(compatibleHealthMetrics({ type: "count", unit: null }), ["steps", "workouts"]);
+  assert.deepEqual(compatibleHealthMetrics({ type: "check", unit: null }), []);
+  assert.throws(() => normalizedValuesForHabit("water", samples, { type: "quantity", unit: "pages" }));
+});
+
+test("sync conflicts use a deterministic version, timestamp, and device order", () => {
+  assert.equal(winner({ revision: 4, updatedAt: "2026-09-14T10:00:00Z", deviceId: "a", deleted: false }, { revision: 3, updatedAt: "2026-09-14T11:00:00Z", deviceId: "z", deleted: false }), "local");
+  assert.equal(winner({ revision: 4, updatedAt: "2026-09-14T10:00:00Z", deviceId: "a", deleted: true }, { revision: 4, updatedAt: "2026-09-14T10:00:00Z", deviceId: "b", deleted: false }), "remote");
 });

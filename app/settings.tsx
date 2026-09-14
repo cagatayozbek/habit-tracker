@@ -5,6 +5,8 @@ import { Screen, Label, styles } from "../components/ui";
 import { useTheme } from "../theme/ThemeProvider";
 import { selectionHaptic } from "../lib/haptics";
 import { useTranslation, type Language } from "../lib/i18n";
+import { HealthSettings } from "../components/HealthSettings";
+import { BackupSettings } from "../components/BackupSettings";
 export default function Settings() {
   const { colors, appearance, setAppearance } = useTheme();
   const { t, language, setLanguage } = useTranslation();
@@ -96,6 +98,8 @@ export default function Settings() {
           {t("deviceOnly")}
         </Label>
       </View>
+      <HealthSettings />
+      <BackupSettings />
     </Screen>
   );
 }

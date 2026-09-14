@@ -58,6 +58,8 @@ export function HabitEditor({ habit }: { habit?: Habit }) {
   const [reminderTime, setReminderTime] = useState(
     habit?.reminderTime ?? "09:00",
   );
+  const [additionalReminderTimes, setAdditionalReminderTimes] = useState((habit?.reminderTimes ?? []).filter((value) => value !== (habit?.reminderTime ?? "09:00")).join(", "));
+  const [followUpMinutes, setFollowUpMinutes] = useState(habit?.followUpMinutes?.toString() ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pending = useRef(false);
@@ -96,6 +98,12 @@ export function HabitEditor({ habit }: { habit?: Habit }) {
       return;
     }
     const parsedTarget = Number(targetValue.replace(",", "."));
+    const parsedReminderTimes = [reminderTime, ...additionalReminderTimes.split(",").map((value) => value.trim()).filter(Boolean)];
+    const parsedFollowUp = followUpMinutes.trim() ? Number(followUpMinutes) : null;
+    if (reminderEnabled && (parsedReminderTimes.some((value) => !parseReminderTime(value)) || (parsedFollowUp !== null && (!Number.isInteger(parsedFollowUp) || parsedFollowUp <= 0)))) {
+      setError("Enter reminder times as HH:MM and a positive follow-up delay.");
+      return;
+    }
     if (!Number.isFinite(parsedTarget) || parsedTarget <= 0 || (type === "count" && !Number.isInteger(parsedTarget))) {
       setError("Enter a valid target.");
       return;
@@ -129,6 +137,8 @@ export function HabitEditor({ habit }: { habit?: Habit }) {
         scheduledDays: scheduleType === "weekdays" ? [...days].sort() : [],
         reminderEnabled,
         reminderTime: reminderEnabled ? reminderTime : null,
+        reminderTimes: reminderEnabled ? [...new Set(parsedReminderTimes)] : [],
+        followUpMinutes: reminderEnabled ? parsedFollowUp : null,
         createdAt: habit?.createdAt ?? now,
         archivedAt: habit?.archivedAt ?? null,
       };
@@ -364,7 +374,7 @@ export function HabitEditor({ habit }: { habit?: Habit }) {
             />
           </Pressable>
           {reminderEnabled ? (
-            <DateTimePicker
+            <><DateTimePicker
               value={(() => {
                 const time = parseReminderTime(reminderTime) ?? {
                   hour: 9,
@@ -380,6 +390,9 @@ export function HabitEditor({ habit }: { habit?: Habit }) {
                 if (selected) setReminderTime(formatReminderTime(selected));
               }}
             />
+            <TextInput accessibilityLabel="Additional reminder times" placeholder="More times, e.g. 13:00, 18:30" placeholderTextColor={colors.textSecondary} value={additionalReminderTimes} onChangeText={setAdditionalReminderTimes} autoCapitalize="none" style={{ color: colors.textPrimary, backgroundColor: colors.surface, padding: 16, borderRadius: 16, fontSize: 17, minHeight: 54 }} />
+            <TextInput accessibilityLabel="Incomplete follow-up delay" placeholder="Optional follow-up minutes" placeholderTextColor={colors.textSecondary} value={followUpMinutes} onChangeText={setFollowUpMinutes} keyboardType="number-pad" style={{ color: colors.textPrimary, backgroundColor: colors.surface, padding: 16, borderRadius: 16, fontSize: 17, minHeight: 54 }} />
+            <Label secondary style={styles.caption}>Reminders only run on scheduled days. Completing the habit cancels the rest of today’s reminders.</Label></>
           ) : null}
         </View>
         {error ? (

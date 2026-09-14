@@ -20,6 +20,8 @@ type HabitRow = {
   frequency_type: Habit["frequencyType"];
   reminder_enabled: number;
   reminder_time: string | null;
+  reminder_times: string;
+  follow_up_minutes: number | null;
   created_at: string;
   archived_at: string | null;
 };
@@ -49,6 +51,8 @@ async function hydrate(db: Connection, row: HabitRow): Promise<Habit> {
   const versions = await schedulesForHabit(db, row.id);
   const current = versions.find((version) => version.effectiveUntil === null) ?? null;
   const schedule = current ?? { ...legacySchedule(row), weekdays: days.map((day) => day.weekday) };
+  let reminderTimes: string[] = [];
+  try { const parsed: unknown = JSON.parse(row.reminder_times ?? "[]"); if (Array.isArray(parsed)) reminderTimes = parsed.filter((value): value is string => typeof value === "string"); } catch { reminderTimes = row.reminder_time ? [row.reminder_time] : []; }
   return {
     id: row.id,
     name: row.name,
@@ -67,6 +71,8 @@ async function hydrate(db: Connection, row: HabitRow): Promise<Habit> {
     scheduledDays: schedule.type === "weekdays" ? schedule.weekdays : [],
     reminderEnabled: row.reminder_enabled === 1,
     reminderTime: row.reminder_time,
+    reminderTimes,
+    followUpMinutes: row.follow_up_minutes,
     createdAt: row.created_at,
     archivedAt: row.archived_at,
   };
@@ -152,9 +158,9 @@ export function habitRepository(db: Database) {
           if (!existingGroup) await tx.runAsync("INSERT INTO habit_groups (id, name, created_at) VALUES (?, ?, ?)", groupId, trimmedGroup, currentTimestamp());
         }
         await tx.runAsync(
-          `INSERT INTO habits (id, name, icon, color, description, habit_type, target_value, unit, goal_period, group_id, sort_order, frequency_type, reminder_enabled, reminder_time, created_at, archived_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET name=excluded.name, icon=excluded.icon, color=excluded.color, description=excluded.description, habit_type=excluded.habit_type, target_value=excluded.target_value, unit=excluded.unit, goal_period=excluded.goal_period, group_id=excluded.group_id, sort_order=excluded.sort_order, frequency_type=excluded.frequency_type, reminder_enabled=excluded.reminder_enabled, reminder_time=excluded.reminder_time, archived_at=excluded.archived_at`,
+          `INSERT INTO habits (id, name, icon, color, description, habit_type, target_value, unit, goal_period, group_id, sort_order, frequency_type, reminder_enabled, reminder_time, reminder_times, follow_up_minutes, created_at, archived_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET name=excluded.name, icon=excluded.icon, color=excluded.color, description=excluded.description, habit_type=excluded.habit_type, target_value=excluded.target_value, unit=excluded.unit, goal_period=excluded.goal_period, group_id=excluded.group_id, sort_order=excluded.sort_order, frequency_type=excluded.frequency_type, reminder_enabled=excluded.reminder_enabled, reminder_time=excluded.reminder_time, reminder_times=excluded.reminder_times, follow_up_minutes=excluded.follow_up_minutes, archived_at=excluded.archived_at`,
           habit.id,
           habit.name.trim(),
           habit.icon,
@@ -169,6 +175,8 @@ export function habitRepository(db: Database) {
           habit.frequencyType,
           Number(habit.reminderEnabled),
           habit.reminderTime,
+          JSON.stringify(habit.reminderTimes ?? (habit.reminderTime ? [habit.reminderTime] : [])),
+          habit.followUpMinutes ?? null,
           habit.createdAt,
           habit.archivedAt,
         );
@@ -202,6 +210,12 @@ export function habitRepository(db: Database) {
         archivedAt,
         id,
       );
+    },
+    async archiveMany(ids: readonly string[], archivedAt: string): Promise<void> {
+      await db.withExclusiveTransactionAsync(async (tx) => {
+        for (const id of [...new Set(ids)])
+          await tx.runAsync("UPDATE habits SET archived_at = ? WHERE id = ?", archivedAt, id);
+      });
     },
     async reorder(ids: readonly string[]): Promise<void> {
       await db.withExclusiveTransactionAsync(async (tx) => {
