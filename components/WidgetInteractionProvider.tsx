@@ -1,23 +1,22 @@
 import { useEffect } from "react";
 import { Platform } from "react-native";
-import { addUserInteractionListener } from "expo-widgets";
 import { useHabitRepository } from "../hooks/useHabitRepository";
 import { useProgressRepository } from "../hooks/useProgressRepository";
 import { currentTimestamp, localDateKey, localWeekday } from "../lib/dates";
 import { localIdentifier } from "../lib/ids";
-import DailyProgressWidget from "../widgets/DailyProgressWidget";
-import TodayHabitsWidget from "../widgets/TodayHabitsWidget";
-import SingleHabitWidget from "../widgets/SingleHabitWidget";
 import { completionPercentage } from "../lib/progress";
+import { subscribeToWidgetInteractions, updateTodayWidgets } from "../features/widgets/widget.bridge";
 
 export function WidgetInteractionProvider() {
   const habits = useHabitRepository();
   const progress = useProgressRepository();
   useEffect(() => {
     if (Platform.OS !== "ios") return;
-    const subscription = addUserInteractionListener((event) => {
+    let unsubscribe: () => void = () => undefined;
+    let cancelled = false;
+    void subscribeToWidgetInteractions((target) => {
       void (async () => {
-        const [action, habitId] = event.target.split(":");
+        const [action, habitId] = target.split(":");
         if (!habitId || !["toggle", "increment"].includes(action)) return;
         const habit = await habits.get(habitId);
         if (!habit || habit.archivedAt) return;
@@ -30,13 +29,10 @@ export function WidgetInteractionProvider() {
         }
         const today = await habits.listScheduledForDate(date, localWeekday(new Date()));
         const completed = today.filter((item) => item.completedToday).length;
-        DailyProgressWidget.updateSnapshot({ completed, total: today.length, percentage: completionPercentage(completed, today.length), label: "Today" });
-        TodayHabitsWidget.updateSnapshot({ habits: today.map((item) => ({ id: item.id, name: item.name, completed: item.completedToday })) });
-        const selected = today.find((item) => item.id === habitId) ?? today[0];
-        if (selected) SingleHabitWidget.updateSnapshot({ id: selected.id, name: selected.name, value: selected.progressValue, target: selected.targetValue, completed: selected.completedToday, type: selected.type });
+        await updateTodayWidgets(today, completionPercentage(completed, today.length));
       })().catch(() => undefined);
-    });
-    return () => subscription.remove();
+    }).then((remove) => { if (cancelled) remove(); else unsubscribe = remove; });
+    return () => { cancelled = true; unsubscribe(); };
   }, [habits, progress]);
   return null;
 }

@@ -13,7 +13,7 @@ type TimerRow = {
 };
 
 function elapsedSeconds(startedAt: string, now: string): number {
-  const elapsed = (Date.parse(now) - Date.parse(startedAt)) / 1000;
+  const elapsed = Math.round((Date.parse(now) - Date.parse(startedAt)) / 1000);
   if (!Number.isFinite(elapsed) || elapsed < 0) throw new Error("Invalid timer timestamp.");
   return elapsed;
 }

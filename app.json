@@ -65,23 +65,35 @@
               "name": "ConsistencyHeatmapWidget",
               "displayName": "Consistency",
               "description": "A six-month view of your habit consistency.",
-              "supportedFamilies": ["systemMedium", "systemLarge"]
+              "supportedFamilies": [
+                "systemMedium",
+                "systemLarge"
+              ]
             },
             {
               "name": "TodayHabitsWidget",
               "displayName": "Today Habits",
               "description": "Complete today's habits without opening the app.",
-              "supportedFamilies": ["systemMedium", "systemLarge", "accessoryRectangular"]
+              "supportedFamilies": [
+                "systemMedium",
+                "systemLarge",
+                "accessoryRectangular"
+              ]
             },
             {
               "name": "SingleHabitWidget",
               "displayName": "Single Habit",
               "description": "Track one habit from Home or Lock Screen.",
-              "supportedFamilies": ["systemSmall", "accessoryCircular", "accessoryRectangular"]
+              "supportedFamilies": [
+                "systemSmall",
+                "accessoryCircular",
+                "accessoryRectangular"
+              ]
             }
           ]
         }
-      ]
+      ],
+      "expo-sharing"
     ],
     "web": {
       "bundler": "metro"
